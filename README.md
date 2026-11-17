@@ -1,3 +1,18 @@
+# TP17 – Secret Scanning con Gitleaks
+
+Se incorpora Gitleaks al pipeline CI/CD para detectar posibles credenciales y secretos expuestos en el repositorio.
+
+Se implementan dos jobs independientes:
+
+| Job en Pipeline | Tipo de evaluación | Exit Code | Acción ante hallazgos | Evidencia generada |
+|---|---|---|---|---|
+| `gitleaks-andon-cord` | Secret scanning en historial Git | 1 | Bloquea el pipeline | Resumen en `$GITHUB_STEP_SUMMARY` |
+| `gitleaks-audit-report` | Reporte de inspección JSON | 0 | Informativo: genera evidencia | Artifact JSON descargable |
+
+También se incorpora un hook local `pre-commit` para prevenir commits que contengan secretos.
+
+---
+
 ## TP16 — Escaneo de Seguridad de Contenedores, Dependencias e IaC con Trivy (Pipeline 3 Fases)
 
 Integración de **Trivy** en la fábrica de software (CI/CD) aplicando la arquitectura de **3 Fases con Paso de Artefactos** y la resolución de falsos positivos mediante el patrón **Render First (TP10B)**.
