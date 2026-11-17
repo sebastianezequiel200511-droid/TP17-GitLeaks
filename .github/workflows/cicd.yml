@@ -1,0 +1,301 @@
+# ============================================
+# cicd.yml — Pipeline completo CI/CD
+# TP07 — Plan DevOps
+# ============================================
+
+name: CI/CD Pipeline
+
+# ── Triggers ──────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main          # pipeline completo
+      - develop       # solo CI (sin deploy)
+      - 'feature/**'  # solo lint + test
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# ── Variables globales ────────────────────────────────────
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/devops-portfolio
+  PYTHON_VERSION: "3.12"
+  HELM_RELEASE_NAME: mi-app
+  K8S_NAMESPACE: devops-portfolio
+
+# ── Jobs ──────────────────────────────────────────────────
+jobs:
+
+  # ── Job 1: Lint ────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: devops-TP06/backend/requirements.txt
+
+      - name: Instalar dependencias de lint
+        run: pip install flake8 yamllint
+
+      - name: Lint Python (flake8)
+        run: |
+          flake8 devops-TP06/backend/ \
+            --max-line-length=100 \
+            --exclude=devops-TP06/backend/tests/ \
+            --count --statistics
+
+      - name: Lint YAML (yamllint)
+        run: |
+          yamllint -c .yamllint.yml \
+            devops-TP06/docker-compose.yml \
+            .github/workflows/
+
+  # ── Job 2: Test ────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint   # solo corre si lint pasa
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: devops-TP06/backend/requirements.txt
+
+      - name: Instalar dependencias
+        run: pip install -r devops-TP06/backend/requirements.txt
+
+      - name: Correr tests con cobertura
+        run: |
+          cd devops-TP06/backend
+          pytest tests/ \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            -v
+
+      - name: Subir reporte de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: devops-TP06/backend/coverage.xml
+          retention-days: 7
+
+  # ── Job 3: Test de la app integrada (devops-tp12) ──────
+  # Prueba el código integrado que despliega devops-tp12/scripts/deploy.sh.
+  # Las imágenes se construyen para validarlas, pero no se publican.
+  test-integrated-app:
+    name: Test App Integrada (devops-tp12)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: devops-tp12/app/backend/requirements-dev.txt
+
+      - name: Instalar dependencias
+        run: pip install -r devops-tp12/app/backend/requirements-dev.txt
+
+      - name: Lint (flake8)
+        run: |
+          flake8 devops-tp12/app/backend/app.py \
+            --max-line-length=100 \
+            --extend-ignore=E302,E701,E702,W391
+
+      - name: Tests con cobertura (backend integrado, incluye regresión de nota sin título)
+        run: |
+          cd devops-tp12/app/backend
+          pytest tests/ --cov=. --cov-report=term-missing -v
+
+      - name: Build de las imágenes que despliega Kubernetes (sin publicar)
+        run: |
+          docker build -t notes-backend:ci-check devops-tp12/app/backend
+          docker build -t notes-frontend:ci-check devops-tp12/app/frontend
+
+  # =========================================================================
+  # FASE 1: BUILD & PACKAGE
+  # =========================================================================
+  build-and-package:
+    name: "Fase 1: Build & Package"
+    runs-on: ubuntu-latest
+    needs: [test, test-integrated-app]
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compilar imagen Docker
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} ./guia-10/backend
+
+      - name: Exportar imagen a tarball
+        run: |
+          mkdir -p build-artifacts
+          docker save ${{ env.DOCKER_IMAGE }}:${{ github.sha }} -o build-artifacts/app-image.tar
+
+      - name: Publicar artefacto de imagen
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-artifact
+          path: build-artifacts/app-image.tar
+          retention-days: 1
+
+  # =========================================================================
+  # FASE 2A: TRIVY ANDON CORD (HIGH/CRITICAL)
+  # =========================================================================
+  trivy-andon-cord:
+    name: "Fase 2A: Trivy Andon Cord"
+    runs-on: ubuntu-latest
+    needs: [build-and-package]
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Descargar artefacto de imagen
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-artifact
+          path: build-artifacts
+
+      - name: Cargar imagen Docker
+        run: docker load -i build-artifacts/app-image.tar
+
+      - name: Instalar Helm CLI
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.13.0
+
+      - name: Renderizar Helm Chart (TP10B)
+        run: |
+          helm template ${{ env.HELM_RELEASE_NAME }} ./guia-10/devops-portfolio \
+            -f ./guia-10/values-prod.yaml > manifests-rendered-prod.yaml
+
+      - name: Escaneo de contenedor y dependencias (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.DOCKER_IMAGE }}:${{ github.sha }}'
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+      - name: Escaneo de IaC renderizado (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: manifests-rendered-prod.yaml
+          format: table
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Resumen de Andon Cord
+        if: always()
+        run: |
+          echo "### Auditoría Bloqueante de Seguridad (Andon Cord) :shield:" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Evaluación | Severidades | Política de control |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------------|-------------|---------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Contenedor, dependencias e IaC renderizado |" \
+               "HIGH, CRITICAL | Andon Cord activo |" >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  # FASE 2B: REPORTE INFORMATIVO (LOW/MEDIUM)
+  # =========================================================================
+  trivy-audit-report:
+    name: "Fase 2B: Trivy Reporte Informativo"
+    runs-on: ubuntu-latest
+    needs: [build-and-package, trivy-andon-cord]
+    if: always() && needs.build-and-package.result == 'success'
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Descargar artefacto de imagen
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-artifact
+          path: build-artifacts
+
+      - name: Cargar imagen Docker
+        run: docker load -i build-artifacts/app-image.tar
+
+      - name: Escaneo informativo LOW/MEDIUM
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.DOCKER_IMAGE }}:${{ github.sha }}'
+          format: table
+          exit-code: '0'
+          severity: 'LOW,MEDIUM'
+          output: trivy-low-medium-report.txt
+
+      - name: Publicar reporte como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-vulnerabilidades-trivy-low-medium
+          path: trivy-low-medium-report.txt
+          retention-days: 14
+
+      - name: Publicar resumen informativo
+        run: |
+          echo "### Reporte de Vulnerabilidades Informativas (LOW/MEDIUM) :clipboard:" >> "$GITHUB_STEP_SUMMARY"
+          echo "El reporte completo está disponible como artefacto descargable." >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          head -n 35 trivy-low-medium-report.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  # FASE 3: RELEASE & DEPLOY
+  # =========================================================================
+  deploy-k8s-helm:
+    name: "Fase 3: Release & Deploy Helm K8s"
+    runs-on: ubuntu-latest
+    needs: [build-and-package, trivy-andon-cord, trivy-audit-report]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Descargar artefacto de imagen
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-artifact
+          path: build-artifacts
+
+      - name: Cargar imagen Docker aprobada
+        run: docker load -i build-artifacts/app-image.tar
+
+      - name: Login a Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Etiquetar y publicar imagen
+        run: |
+          docker tag ${{ env.DOCKER_IMAGE }}:${{ github.sha }} ${{ env.DOCKER_IMAGE }}:latest
+          docker push ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.DOCKER_IMAGE }}:latest
+
+      - name: Despliegue con Helm en Kubernetes
+        run: |
+          echo "Desplegando Helm Chart '${{ env.HELM_RELEASE_NAME }}' en namespace '${{ env.K8S_NAMESPACE }}'..."
+          # helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ./guia-10/devops-portfolio -n ${{ env.K8S_NAMESPACE }}
