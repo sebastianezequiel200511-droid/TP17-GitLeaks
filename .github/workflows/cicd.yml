@@ -286,7 +286,9 @@ jobs:
           echo "### Auditoría de Secretos (Gitleaks) :key:" >> "$GITHUB_STEP_SUMMARY"
           echo "| Evaluación | Tipo de Control | Acción en Pipeline |" >> "$GITHUB_STEP_SUMMARY"
           echo "|------------|-----------------|--------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Fuga de Secretos** | **Andon Cord Activo** | Bloquea el merge si se detectan credenciales |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Fuga de Secretos** | **Andon Cord Activo** |" \
+          "Bloquea el merge si se detectan credenciales |" \
+          >> "$GITHUB_STEP_SUMMARY"
 
   # =========================================================================
   # FASE 2D: GITLEAKS AUDIT REPORT (INFORMATIVO)

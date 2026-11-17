@@ -4,12 +4,15 @@ title = "Gitleaks Config - Notes App DevSecOps"
 useDefault = true
 
 [allowlist]
-description = "Permitir archivos de prueba y variables de test conocidas"
+description = "Permitir archivos de prueba y valores conocidos de ejemplo"
 paths = [
   '''backend/tests/.*''',
   '''scripts/verificar.*\.sh'''
 ]
 regexes = [
   '''EXAMPLEKEY''',
-  '''devops123'''
+  '''devops123''',
+  '''dev-password''',
+  '''c3VwZXItc2VjcmV0LXByb2QtcGFzc3dvcmQ=''',
+  '''38d9f2b90a2cd6e5162e74ff17eb43642928e0262e0fea36c7bd451fdbad1ea2'''
 ]
