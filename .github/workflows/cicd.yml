@@ -263,12 +263,80 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   # =========================================================================
+  # FASE 2C: GITLEAKS ANDON CORD (BLOQUEO DE SECRETOS)
+  # =========================================================================
+  gitleaks-andon-cord:
+    name: "Fase 2C: Gitleaks Andon Cord"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código (historial completo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escaneo bloqueante de secretos
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+
+      - name: Resumen de Andon Cord
+        if: always()
+        run: |
+          echo "### Auditoría de Secretos (Gitleaks) :key:" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Evaluación | Tipo de Control | Acción en Pipeline |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------------|-----------------|--------------------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Fuga de Secretos** | **Andon Cord Activo** | Bloquea el merge si se detectan credenciales |" >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  # FASE 2D: GITLEAKS AUDIT REPORT (INFORMATIVO)
+  # =========================================================================
+  gitleaks-audit-report:
+    name: "Fase 2D: Gitleaks Reporte Informativo"
+    runs-on: ubuntu-latest
+    needs: [build-and-package, gitleaks-andon-cord]
+    if: always() && needs.build-and-package.result == 'success'
+    steps:
+      - name: Checkout del código (historial completo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar Gitleaks CLI 8.18.2
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Generar reporte JSON de secretos
+        run: |
+          gitleaks detect --source . --report-format json --report-path gitleaks-report.json || true
+
+      - name: Publicar reporte como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-fuga-secretos-gitleaks
+          path: gitleaks-report.json
+          retention-days: 14
+
+      - name: Publicar resumen informativo
+        if: always()
+        run: |
+          echo "### Reporte Informativo de Secretos (Gitleaks) :clipboard:" >> "$GITHUB_STEP_SUMMARY"
+          echo "El reporte completo está disponible como artefacto descargable." >> "$GITHUB_STEP_SUMMARY"
+          if [ -f gitleaks-report.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            head -n 30 gitleaks-report.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # =========================================================================
   # FASE 3: RELEASE & DEPLOY
   # =========================================================================
   deploy-k8s-helm:
     name: "Fase 3: Release & Deploy Helm K8s"
     runs-on: ubuntu-latest
-    needs: [build-and-package, trivy-andon-cord, trivy-audit-report]
+    needs: [build-and-package, trivy-andon-cord, trivy-audit-report, gitleaks-andon-cord]
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout del código
